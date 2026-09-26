@@ -1,0 +1,9 @@
+Package: com.alpha.executor
+Name: Executor
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: iOS Roblox Executor dylib
+Maintainer: alpha_xk
+Author: alpha_xk
+Section: Tweaks
+Depends: mobilesubstrate
