@@ -1,11 +1,11 @@
 // language: Objective-C, file: UIOverlay.h, runtime: iOS 15+
-// *واجهة عائمة — زر عشان يفتح panel الـ script*
+// *واجهة صامتة → تظهر بس في اللعبة المحددة*
 
 #import <UIKit/UIKit.h>
 
 @interface UIOverlay : NSObject
 
-- (void)show;
-- (void)hide;
+- (void)startSilentMode;   // يبدأ المراقبة (بدون UI مرئي)
+- (void)stop;
 
 @end
