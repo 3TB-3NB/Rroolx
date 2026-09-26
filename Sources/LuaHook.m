@@ -45,7 +45,6 @@ static lua_settop_t     g_lua_settop = NULL;
 
 - (BOOL)installHooks {
     if (self.hooksInstalled) return YES;
-    
     os_log_info(g_log, "installing hooks...");
     
     void *handle = dlopen(NULL, RTLD_NOW);
