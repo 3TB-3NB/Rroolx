@@ -1,5 +1,5 @@
 // language: Objective-C, file: UIOverlay.m, runtime: iOS 15+
-// *نسخة تشخيصية — الزر يظهر دائماً + panel فيه معلومات*
+// *نسخة مُصلّحة — اللمس يمر للعناصر الفرعية فقط*
 
 #import "UIOverlay.h"
 #import "Executor.h"
@@ -7,18 +7,43 @@
 #import <os/log.h>
 
 static os_log_t g_log;
-
 static const NSTimeInterval kCheckInterval = 2.0;
+
+// ⚠️ هذه هي الفئة السحرية: pass-through container
+// يمرر اللمس للتطبيق إلا لو كان على عنصر فرعي تفاعلي
+@interface PassThroughView : UIView
+@end
+
+@implementation PassThroughView
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit = [super hitTest:point withEvent:event];
+    // إذا كان العنصر اللي انضرب هو الحاوية نفسها → مرّر اللمس
+    if (hit == self) return nil;
+    return hit;
+}
+
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    // فقط ابن الحاوية نفسه ما يستقبل
+    // العناصر الفرعية التفاعلية هي اللي تستقبل
+    for (UIView *sub in self.subviews) {
+        if (sub.hidden || sub.alpha == 0 || !sub.userInteractionEnabled) continue;
+        CGPoint subPoint = [sub convertPoint:point fromView:self];
+        if ([sub pointInside:subPoint withEvent:event]) {
+            return YES;
+        }
+    }
+    return NO;  // ← المفتاح: الحاوية نفسها ما تستقبل شي
+}
+@end
 
 @interface UIOverlay () <UITextViewDelegate>
 
-@property (nonatomic, strong) UIView *container;
+@property (nonatomic, strong) PassThroughView *container;
 @property (nonatomic, strong) UIButton *floatButton;
 @property (nonatomic, strong) UIView *panel;
 @property (nonatomic, strong) UITextView *scriptEditor;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UILabel *diagLabel;
-
 @property (nonatomic, strong) NSTimer *monitorTimer;
 @property (nonatomic, assign) BOOL uiBuilt;
 
@@ -30,13 +55,9 @@ static const NSTimeInterval kCheckInterval = 2.0;
 
 - (void)startSilentMode {
     g_log = os_log_create("com.alpha.executor", "ui");
-    
     dispatch_async(dispatch_get_main_queue(), ^{
         self.uiBuilt = NO;
-        
-        // حاول نبني الـ UI كل ثانيتين لين ينجح
         [self startMonitoring];
-        
         os_log_info(g_log, "silent mode started");
     });
 }
@@ -53,9 +74,7 @@ static const NSTimeInterval kCheckInterval = 2.0;
 #pragma mark - Monitoring
 
 - (void)startMonitoring {
-    // حاول فوراً
     [self attemptBuild];
-    
     self.monitorTimer = [NSTimer scheduledTimerWithTimeInterval:kCheckInterval
                                                          target:self
                                                        selector:@selector(attemptBuild)
@@ -66,7 +85,6 @@ static const NSTimeInterval kCheckInterval = 2.0;
 
 - (void)attemptBuild {
     if (self.uiBuilt && self.container && self.container.superview) {
-        // حدّث المعلومات التشخيصية
         [self updateDiag];
         return;
     }
@@ -81,21 +99,17 @@ static const NSTimeInterval kCheckInterval = 2.0;
     [self buildUI:host];
 }
 
-#pragma mark - Find window
-
 - (UIWindow *)findRobloxKeyWindow {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if (![scene isKindOfClass:[UIWindowScene class]]) continue;
         UIWindowScene *ws = (UIWindowScene *)scene;
         for (UIWindow *w in ws.windows) {
             if (w.isKeyWindow && !w.hidden) {
-                // تجنب أي نافذة فيها حاويتنا
                 if ([w viewWithTag:99999]) continue;
                 return w;
             }
         }
     }
-    // fallback
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         if (!w.hidden && ![w viewWithTag:99999]) return w;
     }
@@ -106,13 +120,10 @@ static const NSTimeInterval kCheckInterval = 2.0;
 
 - (void)buildUI:(UIWindow *)host {
     UIView *rootView = host.rootViewController.view;
-    if (!rootView) {
-        os_log_error(g_log, "host rootView is nil");
-        return;
-    }
+    if (!rootView) return;
     
-    // حاوية شفافة تملأ الشاشة
-    UIView *container = [[UIView alloc] initWithFrame:rootView.bounds];
+    // استخدم PassThroughView بدل UIView
+    PassThroughView *container = [[PassThroughView alloc] initWithFrame:rootView.bounds];
     container.backgroundColor = [UIColor clearColor];
     container.tag = 99999;
     container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -124,14 +135,11 @@ static const NSTimeInterval kCheckInterval = 2.0;
     [self buildFloatButton:container];
     [self buildPanel:container];
     
-    // ⚠️ الزر ظاهر دائماً (للتشخيص)
     self.floatButton.hidden = NO;
     self.panel.hidden = YES;
     
     self.uiBuilt = YES;
     os_log_info(g_log, "UI built successfully");
-    
-    // حدّث المعلومات
     [self updateDiag];
 }
 
@@ -157,8 +165,7 @@ static const NSTimeInterval kCheckInterval = 2.0;
     [btn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
     
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
-                                    initWithTarget:self
-                                            action:@selector(handlePan:)];
+                                    initWithTarget:self action:@selector(handlePan:)];
     [btn addGestureRecognizer:pan];
     
     [container addSubview:btn];
@@ -168,7 +175,6 @@ static const NSTimeInterval kCheckInterval = 2.0;
 - (void)buildPanel:(UIView *)container {
     CGFloat screenW = container.bounds.size.width;
     CGFloat screenH = container.bounds.size.height;
-    
     CGFloat panelW = screenW * 0.9;
     CGFloat panelH = screenH * 0.65;
     
@@ -181,6 +187,7 @@ static const NSTimeInterval kCheckInterval = 2.0;
     panel.layer.shadowColor = [UIColor blackColor].CGColor;
     panel.layer.shadowOpacity = 0.8;
     panel.layer.shadowRadius = 12;
+    panel.userInteractionEnabled = YES;
     panel.hidden = YES;
     
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, panelW - 60, 30)];
@@ -197,9 +204,7 @@ static const NSTimeInterval kCheckInterval = 2.0;
     [closeBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
     [panel addSubview:closeBtn];
     
-    // معلومات تشخيصية
-    UILabel *diag = [[UILabel alloc] initWithFrame:
-                     CGRectMake(16, 44, panelW - 32, 60)];
+    UILabel *diag = [[UILabel alloc] initWithFrame:CGRectMake(16, 44, panelW - 32, 60)];
     diag.text = @"diag...";
     diag.textColor = [UIColor yellowColor];
     diag.font = [UIFont fontWithName:@"Menlo" size:11] ?: [UIFont systemFontOfSize:11];
@@ -207,7 +212,6 @@ static const NSTimeInterval kCheckInterval = 2.0;
     [panel addSubview:diag];
     self.diagLabel = diag;
     
-    // محرر السكربت
     UITextView *editor = [[UITextView alloc] initWithFrame:
                           CGRectMake(16, 110, panelW - 32, panelH - 200)];
     editor.backgroundColor = [UIColor colorWithRed:0.05 green:0.05 blue:0.08 alpha:1.0];
@@ -249,17 +253,14 @@ static const NSTimeInterval kCheckInterval = 2.0;
 - (void)updateDiag {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!self.diagLabel) return;
-        
         LuaHook *hook = [LuaHook sharedInstance];
         NSNumber *pid = [hook currentPlaceId];
         lua_State *state = [hook mainState];
-        
         NSString *text = [NSString stringWithFormat:
                           @"lua_State: %@\nPlaceId: %@\nAllowed: %@",
                           state ? @"OK" : @"nil",
                           pid ? [pid stringValue] : @"nil",
                           [[Executor allowedPlaceIds] componentsJoinedByString:@","]];
-        
         self.diagLabel.text = text;
     });
 }
@@ -269,25 +270,20 @@ static const NSTimeInterval kCheckInterval = 2.0;
 - (void)togglePanel {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.panel.hidden = !self.panel.hidden;
-        if (!self.panel.hidden) {
-            [self updateDiag];
-        }
+        if (!self.panel.hidden) [self updateDiag];
     });
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     UIView *host = self.container;
     if (!host) return;
-    
     CGPoint translation = [pan translationInView:host];
     CGPoint newCenter = CGPointMake(self.floatButton.center.x + translation.x,
                                     self.floatButton.center.y + translation.y);
-    
     CGFloat halfW = self.floatButton.bounds.size.width / 2;
     CGFloat halfH = self.floatButton.bounds.size.height / 2;
     newCenter.x = MAX(halfW, MIN(host.bounds.size.width - halfW, newCenter.x));
     newCenter.y = MAX(halfH, MIN(host.bounds.size.height - halfH, newCenter.y));
-    
     self.floatButton.center = newCenter;
     [pan setTranslation:CGPointZero inView:host];
 }
@@ -296,11 +292,9 @@ static const NSTimeInterval kCheckInterval = 2.0;
     NSString *script = self.scriptEditor.text;
     self.statusLabel.text = @"Executing...";
     self.statusLabel.textColor = [UIColor yellowColor];
-    
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *error = nil;
         BOOL ok = [[Executor sharedInstance] executeScript:script error:&error];
-        
         dispatch_async(dispatch_get_main_queue(), ^{
             if (ok) {
                 self.statusLabel.text = @"OK Executed";
