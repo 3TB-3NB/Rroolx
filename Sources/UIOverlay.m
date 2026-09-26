@@ -8,7 +8,6 @@
 
 static os_log_t g_log;
 
-// فترة الفحص (بالثواني)
 static const NSTimeInterval kCheckInterval = 1.5;
 
 @interface UIOverlay () <UITextViewDelegate>
@@ -38,16 +37,14 @@ static const NSTimeInterval kCheckInterval = 1.5;
         [self setupFloatButton];
         [self setupPanel];
         
-        // كل شي مخفي بالبداية
         self.floatButton.hidden = YES;
         self.panel.hidden = YES;
         self.uiVisible = NO;
         self.targetGameDetected = NO;
         
-        // ابدأ المراقبة
         [self startMonitoring];
         
-        os_log_info(g_log, "silent mode started — monitoring");
+        os_log_info(g_log, "silent mode started - monitoring");
     });
 }
 
@@ -68,12 +65,10 @@ static const NSTimeInterval kCheckInterval = 1.5;
                                                        selector:@selector(checkGameState)
                                                        userInfo:nil
                                                         repeats:YES];
-    // خليه يشتغل حتى وقت التمرير
     [[NSRunLoop mainRunLoop] addTimer:self.monitorTimer forMode:NSRunLoopCommonModes];
 }
 
 - (void)checkGameState {
-    // الطريقة 1: من Luau VM (الأدق)
     NSNumber *placeId = [[LuaHook sharedInstance] currentPlaceId];
     
     if (placeId) {
@@ -89,13 +84,10 @@ static const NSTimeInterval kCheckInterval = 1.5;
         return;
     }
     
-    // الطريقة 2: fallback — UI detection
-    // لو الـ Luau hook فشل، نستخدم كشف الـ UI
     [self fallbackDetection];
 }
 
 - (void)fallbackDetection {
-    // ابحث عن عناصر UI مميزة للعبة (زي زر Leave)
     UIWindow *mainWindow = [self findRobloxMainWindow];
     if (!mainWindow) return;
     
@@ -125,7 +117,6 @@ static const NSTimeInterval kCheckInterval = 1.5;
 }
 
 - (BOOL)detectInGameByUI:(UIView *)view {
-    // ابحث عن أي عنصر فيه كلمة "Leave" أو أيقونة خروج
     for (UIView *sub in view.subviews) {
         if ([sub isKindOfClass:[UIButton class]]) {
             UIButton *btn = (UIButton *)sub;
@@ -152,7 +143,6 @@ static const NSTimeInterval kCheckInterval = 1.5;
         self.uiVisible = YES;
         self.floatButton.hidden = NO;
         
-        // نبضة صغيرة للإشعار
         UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc]
                                             initWithStyle:UIImpactFeedbackStyleMedium];
         [gen impactOccurred];
@@ -174,17 +164,14 @@ static const NSTimeInterval kCheckInterval = 1.5;
 #pragma mark - Window
 
 - (void)setupWindow {
-    UIWindow *window = [[UIWindow alloc] init",];
-    window.frame = [U errorIScreen mainScreen].bounds;
-    window.window.localLevel = UIWindowLevelAlert + 1000;
-ized    window.backgroundColor = [UIColorDescription clearColor];
+    UIWindow *window = [[UIWindow alloc] init];
+    window.frame = [UIScreen mainScreen].bounds;
+    window.windowLevel = UIWindowLevelAlert + 1000;
+    window.backgroundColor = [UIColor clearColor];
     window.rootViewController = [[UIViewController alloc] init];
     window.rootViewController.view.backgroundColor = [UIColor clearColor];
-    
-    // ⚠️ مرر اللمس للتطبيق
     window.userInteractionEnabled = YES;
     window.rootViewController.view.userInteractionEnabled = NO;
-    
     window.hidden = NO;
     self.overlayWindow = window;
 }
@@ -205,7 +192,7 @@ ized    window.backgroundColor = [UIColorDescription clearColor];
     btn.layer.shadowOpacity = 0.5;
     btn.layer.shadowRadius = 4;
     btn.layer.shadowOffset = CGSizeMake(0, 2);
-    [btn setTitle:@"α" forState:UIControlStateNormal];
+    [btn setTitle:@"a" forState:UIControlStateNormal];
     btn.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     [btn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
     btn.userInteractionEnabled = YES;
@@ -256,7 +243,7 @@ ized    window.backgroundColor = [UIColorDescription clearColor];
     
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     closeBtn.frame = CGRectMake(panelW - 44, 8, 36, 36);
-    [closeBtn setTitle:@"×" forState:UIControlStateNormal];
+    [closeBtn setTitle:@"x" forState:UIControlStateNormal];
     [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeBtn.titleLabel.font = [UIFont systemFontOfSize:28];
     [closeBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
@@ -316,10 +303,10 @@ ized    window.backgroundColor = [UIColorDescription clearColor];
         
         dispatch_async(dispatch_get_main_queue(), ^{
             if (ok) {
-                self.statusLabel.text = @"✓ Executed";
+                self.statusLabel.text = @"OK Executed";
                 self.statusLabel.textColor = [UIColor greenColor];
             } else {
-                self.statusLabel.text = [NSString stringWithFormat:@"✗ %@];
+                self.statusLabel.text = [NSString stringWithFormat:@"ERR %@", error.localizedDescription];
                 self.statusLabel.textColor = [UIColor redColor];
             }
         });
