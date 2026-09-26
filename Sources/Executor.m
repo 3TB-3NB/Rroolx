@@ -22,9 +22,7 @@ static NSArray<NSNumber *> *kAllowedPlaceIds = nil;
     dispatch_once(&onceToken, ^{
         instance = [[Executor alloc] init];
         g_log = os_log_create("com.alpha.executor", "main");
-        kAllowedPlaceIds = @[
-            @(4924922222),   // Brookhaven RP
-        ];
+        kAllowedPlaceIds = @[ @(4924922222) ];
     });
     return instance;
 }
@@ -41,18 +39,17 @@ static NSArray<NSNumber *> *kAllowedPlaceIds = nil;
     if (self.isRunning) return;
     os_log_info(g_log, "executor starting...");
     
-    LuaRuntimeInfo info = [[LuauRuntime shared] info];
     BOOL discovered = [[LuauRuntime shared] discoverAll];
-    info = [[LuauRuntime shared] info];
+    LuaRuntimeInfo info = [[LuauRuntime shared] info];
     
-    os_log_info(g_log, "Discovery: %@", discovered ? @"OK" : @"FAILED");
-    os_log_info(g_log, "  Roblox:       0x%lx", info.robloxBase);
-    os_log_info(g_log, "  luau_execute: 0x%lx", info.luauExecuteAddr);
-    os_log_info(g_log, "  lua_State:    0x%lx", info.luaStateAddr);
+    NSString *diag = [NSString stringWithFormat:
+        @"Roblox: %lx\nluau_exec: %lx\nlua_State: %lx",
+        info.robloxBase, info.luauExecuteAddr, info.luaStateAddr];
     
     dispatch_async(dispatch_get_main_queue(), ^{
         self.overlay = [[UIOverlay alloc] init];
         [self.overlay startSilentMode];
+        [self.overlay setDiagnostics:diag];
     });
     
     self.isRunning = YES;
@@ -72,11 +69,9 @@ static NSArray<NSNumber *> *kAllowedPlaceIds = nil;
 }
 
 - (BOOL)executeFile:(NSString *)path error:(NSError **)error {
-    NSString *script = [NSString stringWithContentsOfFile:path
-                                                 encoding:NSUTF8StringEncoding
-                                                    error:error];
-    if (!script) return NO;
-    return [self executeScript:script error:error];
+    NSString *s = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:error];
+    if (!s) return NO;
+    return [self executeScript:s error:error];
 }
 
 @end
