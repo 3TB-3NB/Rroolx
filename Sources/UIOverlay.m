@@ -1,5 +1,5 @@
 // language: Objective-C, file: UIOverlay.m, runtime: iOS 15+
-// *يراقب اللعبة كل ثانية — يظهر الزر بس لو PlaceId مطابق*
+// *حقن مباشر في نافذة Roblox — بدون UIWindow منفصل*
 
 #import "UIOverlay.h"
 #import "Executor.h"
@@ -12,7 +12,7 @@ static const NSTimeInterval kCheckInterval = 1.5;
 
 @interface UIOverlay () <UITextViewDelegate>
 
-@property (nonatomic, strong) UIWindow *overlayWindow;
+@property (nonatomic, strong) UIView *container;      // الحاوية في نافذة Roblox
 @property (nonatomic, strong) UIButton *floatButton;
 @property (nonatomic, strong) UIView *panel;
 @property (nonatomic, strong) UITextView *scriptEditor;
@@ -21,7 +21,7 @@ static const NSTimeInterval kCheckInterval = 1.5;
 
 @property (nonatomic, strong) NSTimer *monitorTimer;
 @property (nonatomic, assign) BOOL uiVisible;
-@property (nonatomic, assign) BOOL targetGameDetected;
+@property (nonatomic, assign) BOOL uiBuilt;
 
 @end
 
@@ -33,18 +33,10 @@ static const NSTimeInterval kCheckInterval = 1.5;
     g_log = os_log_create("com.alpha.executor", "ui");
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self setupWindow];
-        [self setupFloatButton];
-        [self setupPanel];
-        
-        self.floatButton.hidden = YES;
-        self.panel.hidden = YES;
         self.uiVisible = NO;
-        self.targetGameDetected = NO;
-        
+        self.uiBuilt = NO;
         [self startMonitoring];
-        
-        os_log_info(g_log, "silent mode started - monitoring");
+        os_log_info(g_log, "silent mode started");
     });
 }
 
@@ -52,8 +44,8 @@ static const NSTimeInterval kCheckInterval = 1.5;
     dispatch_async(dispatch_get_main_queue(), ^{
         [self.monitorTimer invalidate];
         self.monitorTimer = nil;
-        [self.overlayWindow setHidden:YES];
-        self.overlayWindow = nil;
+        [self.container removeFromSuperview];
+        self.container = nil;
     });
 }
 
@@ -78,7 +70,7 @@ static const NSTimeInterval kCheckInterval = 1.5;
             os_log_info(g_log, "target game detected: %@", placeId);
             [self showUI];
         } else if (!allowed && self.uiVisible) {
-            os_log_info(g_log, "left target game: %@", placeId);
+            os_log_info(g_log, "left target game");
             [self hideUI];
         }
         return;
@@ -88,101 +80,74 @@ static const NSTimeInterval kCheckInterval = 1.5;
 }
 
 - (void)fallbackDetection {
-    UIWindow *mainWindow = [self findRobloxMainWindow];
-    if (!mainWindow) return;
-    
-    BOOL inGame = [self detectInGameByUI:mainWindow.rootViewController.view];
-    
-    if (inGame && !self.uiVisible) {
-        os_log_info(g_log, "in-game detected by UI");
-        [self showUI];
-    } else if (!inGame && self.uiVisible) {
-        os_log_info(g_log, "back to home");
-        [self hideUI];
-    }
+    // لو الـ Luau hook فشل، ما نعرض أي شي
+    // (الـ UI detection السابق كان هش ويسبب مشاكل)
+    return;
 }
 
-- (UIWindow *)findRobloxMainWindow {
+#pragma mark - Find Roblox's key window
+
+- (UIWindow *)findRobloxKeyWindow {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]]) {
-            UIWindowScene *ws = (UIWindowScene *)scene;
-            for (UIWindow *w in ws.windows) {
-                if (w.isKeyWindow && w != self.overlayWindow && !w.hidden) {
-                    return w;
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        UIWindowScene *ws = (UIWindowScene *)scene;
+        for (UIWindow *w in ws.windows) {
+            if (w.isKeyWindow && !w.hidden) {
+                // تجنب النافذة اللي حقنّاها سابقاً
+                if (w.rootViewController &&
+                    [w.rootViewController.view viewWithTag:99999]) {
+                    continue;
                 }
+                return w;
             }
         }
+    }
+    // fallback: أول نافذة
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if (!w.hidden) return w;
     }
     return nil;
 }
 
-- (BOOL)detectInGameByUI:(UIView *)view {
-    for (UIView *sub in view.subviews) {
-        if ([sub isKindOfClass:[UIButton class]]) {
-            UIButton *btn = (UIButton *)sub;
-            NSString *title = [btn titleForState:UIControlStateNormal];
-            if (title && [title.lowercaseString containsString:@"leave"]) {
-                return YES;
-            }
-        }
-        if ([sub isKindOfClass:[UILabel class]]) {
-            UILabel *lbl = (UILabel *)sub;
-            if (lbl.text && [lbl.text.lowercaseString containsString:@"leave"]) {
-                return YES;
-            }
-        }
-        if ([self detectInGameByUI:sub]) return YES;
-    }
-    return NO;
+#pragma mark - Build UI inside Roblox's window
+
+- (void)buildUIIfNeeded:(UIView *)host {
+    if (self.uiBuilt && self.container && self.container.superview == host) return;
+    
+    // إذا فيه حاوية قديمة في نافذة ثانية، انقلها
+    [self.container removeFromSuperview];
+    
+    // حاوية شفافة — تملأ الشاشة بس ما تاكل اللمس
+    UIView *container = [[UIView alloc] initWithFrame:host.bounds];
+    container.backgroundColor = [UIColor clearColor];
+    container.tag = 99999;
+    container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    
+    // ⚠️ مهم: نافذة الحاوية نفسها ما تستقبل لمس
+    // فقط العناصر الفرعية تستقبل
+    container.userInteractionEnabled = YES;
+    
+    // إضافة الحاوية
+    [host addSubview:container];
+    self.container = container;
+    
+    // ابنِ الزر والـ panel
+    [self buildFloatButtonIn:container host:host];
+    [self buildPanelIn:container host:host];
+    
+    // كل شي مخفي بالبداية
+    self.floatButton.hidden = YES;
+    self.panel.hidden = YES;
+    
+    self.uiBuilt = YES;
+    os_log_info(g_log, "UI built inside Roblox window");
 }
 
-#pragma mark - Show/Hide UI
-
-- (void)showUI {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.uiVisible = YES;
-        self.floatButton.hidden = NO;
-        
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc]
-                                            initWithStyle:UIImpactFeedbackStyleMedium];
-        [gen impactOccurred];
-        
-        os_log_info(g_log, "UI shown");
-    });
-}
-
-- (void)hideUI {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.uiVisible = NO;
-        self.floatButton.hidden = YES;
-        self.panel.hidden = YES;
-        
-        os_log_info(g_log, "UI hidden");
-    });
-}
-
-#pragma mark - Window
-
-- (void)setupWindow {
-    UIWindow *window = [[UIWindow alloc] init];
-    window.frame = [UIScreen mainScreen].bounds;
-    window.windowLevel = UIWindowLevelAlert + 1000;
-    window.backgroundColor = [UIColor clearColor];
-    window.rootViewController = [[UIViewController alloc] init];
-    window.rootViewController.view.backgroundColor = [UIColor clearColor];
-    window.userInteractionEnabled = YES;
-    window.rootViewController.view.userInteractionEnabled = NO;
-    window.hidden = NO;
-    self.overlayWindow = window;
-}
-
-#pragma mark - Float Button
-
-- (void)setupFloatButton {
+- (void)buildFloatButtonIn:(UIView *)container host:(UIView *)host {
     CGFloat size = 50;
     CGFloat margin = 20;
-    CGFloat screenW = [UIScreen mainScreen].bounds.size.width;
-    CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
+    CGFloat screenW = host.bounds.size.width;
+    CGFloat screenH = host.bounds.size.height;
     
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
     btn.frame = CGRectMake(screenW - size - margin, screenH / 2 - size / 2, size, size);
@@ -193,32 +158,22 @@ static const NSTimeInterval kCheckInterval = 1.5;
     btn.layer.shadowRadius = 4;
     btn.layer.shadowOffset = CGSizeMake(0, 2);
     [btn setTitle:@"a" forState:UIControlStateNormal];
+    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     btn.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     [btn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
-    btn.userInteractionEnabled = YES;
     
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
                                     initWithTarget:self
                                             action:@selector(handlePan:)];
     [btn addGestureRecognizer:pan];
     
-    [self.overlayWindow.rootViewController.view addSubview:btn];
+    [container addSubview:btn];
     self.floatButton = btn;
 }
 
-- (void)handlePan:(UIPanGestureRecognizer *)pan {
-    CGPoint translation = [pan translationInView:self.overlayWindow.rootViewController.view];
-    CGPoint newCenter = CGPointMake(self.floatButton.center.x + translation.x,
-                                    self.floatButton.center.y + translation.y);
-    self.floatButton.center = newCenter;
-    [pan setTranslation:CGPointZero inView:self.overlayWindow.rootViewController.view];
-}
-
-#pragma mark - Panel
-
-- (void)setupPanel {
-    CGFloat screenW = [UIScreen mainScreen].bounds.size.width;
-    CGFloat screenH = [UIScreen mainScreen].bounds.size.height;
+- (void)buildPanelIn:(UIView *)container host:(UIView *)host {
+    CGFloat screenW = host.bounds.size.width;
+    CGFloat screenH = host.bounds.size.height;
     
     CGFloat panelW = screenW * 0.85;
     CGFloat panelH = screenH * 0.6;
@@ -232,7 +187,6 @@ static const NSTimeInterval kCheckInterval = 1.5;
     panel.layer.shadowColor = [UIColor blackColor].CGColor;
     panel.layer.shadowOpacity = 0.7;
     panel.layer.shadowRadius = 10;
-    panel.userInteractionEnabled = YES;
     panel.hidden = YES;
     
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, panelW - 60, 30)];
@@ -255,7 +209,7 @@ static const NSTimeInterval kCheckInterval = 1.5;
     editor.textColor = [UIColor colorWithRed:0.6 green:0.9 blue:0.6 alpha:1.0];
     editor.font = [UIFont fontWithName:@"Menlo" size:13] ?: [UIFont systemFontOfSize:13];
     editor.layer.cornerRadius = 8;
-    editor.text = @"-- script here\nprint(\"hello from executor\")";
+    editor.text = @"-- script here";
     editor.delegate = self;
     editor.autocorrectionType = UITextAutocorrectionTypeNo;
     editor.autocapitalizationType = UITextAutocapitalizationTypeNone;
@@ -282,14 +236,71 @@ static const NSTimeInterval kCheckInterval = 1.5;
     [panel addSubview:execBtn];
     self.executeButton = execBtn;
     
-    [self.overlayWindow.rootViewController.view addSubview:panel];
+    [container addSubview:panel];
     self.panel = panel;
 }
 
+#pragma mark - Show/Hide
+
+- (void)showUI {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *host = [self findRobloxKeyWindow];
+        if (!host) {
+            os_log_error(g_log, "no host window found");
+            return;
+        }
+        
+        [self buildUIIfNeeded:host.rootViewController.view];
+        
+        self.uiVisible = YES;
+        self.floatButton.hidden = NO;
+        
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc]
+                                            initWithStyle:UIImpactFeedbackStyleMedium];
+        [gen impactOccurred];
+        
+        os_log_info(g_log, "UI shown");
+    });
+}
+
+- (void)hideUI {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.uiVisible = NO;
+        self.floatButton.hidden = YES;
+        self.panel.hidden = YES;
+        os_log_info(g_log, "UI hidden");
+    });
+}
+
+#pragma mark - Actions
+
 - (void)togglePanel {
     dispatch_async(dispatch_get_main_queue(), ^{
+        // تأكد إن الـ UI مبني قبل ما نعرضه
+        if (!self.uiBuilt) {
+            UIWindow *host = [self findRobloxKeyWindow];
+            if (host) [self buildUIIfNeeded:host.rootViewController.view];
+        }
         self.panel.hidden = !self.panel.hidden;
     });
+}
+
+- (void)handlePan:(UIPanGestureRecognizer *)pan {
+    UIView *host = self.container;
+    if (!host) return;
+    
+    CGPoint translation = [pan translationInView:host];
+    CGPoint newCenter = CGPointMake(self.floatButton.center.x + translation.x,
+                                    self.floatButton.center.y + translation.y);
+    
+    // خلّه داخل الحدود
+    CGFloat halfW = self.floatButton.bounds.size.width / 2;
+    CGFloat halfH = self.floatButton.bounds.size.height / 2;
+    newCenter.x = MAX(halfW, MIN(host.bounds.size.width - halfW, newCenter.x));
+    newCenter.y = MAX(halfH, MIN(host.bounds.size.height - halfH, newCenter.y));
+    
+    self.floatButton.center = newCenter;
+    [pan setTranslation:CGPointZero inView:host];
 }
 
 - (void)executeTapped {
@@ -306,7 +317,8 @@ static const NSTimeInterval kCheckInterval = 1.5;
                 self.statusLabel.text = @"OK Executed";
                 self.statusLabel.textColor = [UIColor greenColor];
             } else {
-                self.statusLabel.text = [NSString stringWithFormat:@"ERR %@", error.localizedDescription];
+                self.statusLabel.text = [NSString stringWithFormat:@"ERR %@",
+                                         error.localizedDescription];
                 self.statusLabel.textColor = [UIColor redColor];
             }
         });
