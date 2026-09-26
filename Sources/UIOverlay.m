@@ -1,5 +1,5 @@
 // language: Objective-C, file: UIOverlay.m, runtime: iOS 15+
-// *نسخة مُصلّحة — اللمس يمر للعناصر الفرعية فقط*
+// *نسخة نهائية — panel مركزي + بدون معلومات تشخيصية*
 
 #import "UIOverlay.h"
 #import "Executor.h"
@@ -9,30 +9,22 @@
 static os_log_t g_log;
 static const NSTimeInterval kCheckInterval = 2.0;
 
-// ⚠️ هذه هي الفئة السحرية: pass-through container
-// يمرر اللمس للتطبيق إلا لو كان على عنصر فرعي تفاعلي
 @interface PassThroughView : UIView
 @end
 
 @implementation PassThroughView
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit = [super hitTest:point withEvent:event];
-    // إذا كان العنصر اللي انضرب هو الحاوية نفسها → مرّر اللمس
     if (hit == self) return nil;
     return hit;
 }
-
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    // فقط ابن الحاوية نفسه ما يستقبل
-    // العناصر الفرعية التفاعلية هي اللي تستقبل
     for (UIView *sub in self.subviews) {
         if (sub.hidden || sub.alpha == 0 || !sub.userInteractionEnabled) continue;
         CGPoint subPoint = [sub convertPoint:point fromView:self];
-        if ([sub pointInside:subPoint withEvent:event]) {
-            return YES;
-        }
+        if ([sub pointInside:subPoint withEvent:event]) return YES;
     }
-    return NO;  // ← المفتاح: الحاوية نفسها ما تستقبل شي
+    return NO;
 }
 @end
 
@@ -43,7 +35,6 @@ static const NSTimeInterval kCheckInterval = 2.0;
 @property (nonatomic, strong) UIView *panel;
 @property (nonatomic, strong) UITextView *scriptEditor;
 @property (nonatomic, strong) UILabel *statusLabel;
-@property (nonatomic, strong) UILabel *diagLabel;
 @property (nonatomic, strong) NSTimer *monitorTimer;
 @property (nonatomic, assign) BOOL uiBuilt;
 
@@ -51,7 +42,7 @@ static const NSTimeInterval kCheckInterval = 2.0;
 
 @implementation UIOverlay
 
-#pragma mark - Silent Mode
+#pragma mark - Start / Stop
 
 - (void)startSilentMode {
     g_log = os_log_create("com.alpha.executor", "ui");
@@ -85,17 +76,17 @@ static const NSTimeInterval kCheckInterval = 2.0;
 
 - (void)attemptBuild {
     if (self.uiBuilt && self.container && self.container.superview) {
-        [self updateDiag];
+        // إذا تغيّر حجم الشاشة (دوران/دخول لعبة)، أعد ترتيب الـ UI
+        CGSize hostSize = self.container.superview.bounds.size;
+        if (!CGSizeEqualToSize(self.container.bounds.size, hostSize)) {
+            [self relayoutForSize:hostSize];
+        }
         return;
     }
     
     UIWindow *host = [self findRobloxKeyWindow];
-    if (!host) {
-        os_log_info(g_log, "no host window yet, retrying...");
-        return;
-    }
+    if (!host) return;
     
-    os_log_info(g_log, "host window found, building UI");
     [self buildUI:host];
 }
 
@@ -122,7 +113,6 @@ static const NSTimeInterval kCheckInterval = 2.0;
     UIView *rootView = host.rootViewController.view;
     if (!rootView) return;
     
-    // استخدم PassThroughView بدل UIView
     PassThroughView *container = [[PassThroughView alloc] initWithFrame:rootView.bounds];
     container.backgroundColor = [UIColor clearColor];
     container.tag = 99999;
@@ -140,17 +130,15 @@ static const NSTimeInterval kCheckInterval = 2.0;
     
     self.uiBuilt = YES;
     os_log_info(g_log, "UI built successfully");
-    [self updateDiag];
 }
 
 - (void)buildFloatButton:(UIView *)container {
     CGFloat size = 55;
     CGFloat margin = 20;
-    CGFloat screenW = container.bounds.size.width;
-    CGFloat screenH = container.bounds.size.height;
+    CGSize s = container.bounds.size;
     
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-    btn.frame = CGRectMake(screenW - size - margin, screenH / 2 - size / 2, size, size);
+    btn.frame = CGRectMake(s.width - size - margin, s.height / 2 - size / 2, size, size);
     btn.backgroundColor = [UIColor colorWithRed:0.2 green:0.7 blue:0.4 alpha:0.95];
     btn.layer.cornerRadius = size / 2;
     btn.layer.shadowColor = [UIColor blackColor].CGColor;
@@ -159,6 +147,7 @@ static const NSTimeInterval kCheckInterval = 2.0;
     btn.layer.shadowOffset = CGSizeMake(0, 2);
     btn.layer.borderWidth = 2;
     btn.layer.borderColor = [UIColor whiteColor].CGColor;
+    btn.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
     [btn setTitle:@"a" forState:UIControlStateNormal];
     [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     btn.titleLabel.font = [UIFont boldSystemFontOfSize:24];
@@ -173,15 +162,14 @@ static const NSTimeInterval kCheckInterval = 2.0;
 }
 
 - (void)buildPanel:(UIView *)container {
-    CGFloat screenW = container.bounds.size.width;
-    CGFloat screenH = container.bounds.size.height;
-    CGFloat panelW = screenW * 0.9;
-    CGFloat panelH = screenH * 0.65;
+    // حجم أصغر نسبياً: 80% عرض × 55% ارتفاع
+    CGSize s = container.bounds.size;
+    CGFloat panelW = s.width * 0.8;
+    CGFloat panelH = s.height * 0.55;
+    CGFloat panelX = (s.width - panelW) / 2;
+    CGFloat panelY = (s.height - panelH) / 2;
     
-    UIView *panel = [[UIView alloc] initWithFrame:
-                     CGRectMake((screenW - panelW) / 2,
-                                (screenH - panelH) / 2,
-                                panelW, panelH)];
+    UIView *panel = [[UIView alloc] initWithFrame:CGRectMake(panelX, panelY, panelW, panelH)];
     panel.backgroundColor = [UIColor colorWithRed:0.1 green:0.1 blue:0.15 alpha:0.97];
     panel.layer.cornerRadius = 16;
     panel.layer.shadowColor = [UIColor blackColor].CGColor;
@@ -189,31 +177,30 @@ static const NSTimeInterval kCheckInterval = 2.0;
     panel.layer.shadowRadius = 12;
     panel.userInteractionEnabled = YES;
     panel.hidden = YES;
+    // ⚠️ خلّي الـ panel يتحرك مع resize
+    panel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin | UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, panelW - 60, 30)];
     title.text = @"Executor";
     title.textColor = [UIColor whiteColor];
     title.font = [UIFont boldSystemFontOfSize:18];
+    title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [panel addSubview:title];
     
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     closeBtn.frame = CGRectMake(panelW - 44, 8, 36, 36);
+    closeBtn.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
     [closeBtn setTitle:@"x" forState:UIControlStateNormal];
     [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     closeBtn.titleLabel.font = [UIFont systemFontOfSize:28];
     [closeBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
     [panel addSubview:closeBtn];
     
-    UILabel *diag = [[UILabel alloc] initWithFrame:CGRectMake(16, 44, panelW - 32, 60)];
-    diag.text = @"diag...";
-    diag.textColor = [UIColor yellowColor];
-    diag.font = [UIFont fontWithName:@"Menlo" size:11] ?: [UIFont systemFontOfSize:11];
-    diag.numberOfLines = 0;
-    [panel addSubview:diag];
-    self.diagLabel = diag;
-    
+    // محرر السكربت — يستخدم كل المساحة
+    CGFloat editorTop = 52;
+    CGFloat editorBottom = 100;  // مساحة للـ status + زر Execute
     UITextView *editor = [[UITextView alloc] initWithFrame:
-                          CGRectMake(16, 110, panelW - 32, panelH - 200)];
+                          CGRectMake(16, editorTop, panelW - 32, panelH - editorTop - editorBottom)];
     editor.backgroundColor = [UIColor colorWithRed:0.05 green:0.05 blue:0.08 alpha:1.0];
     editor.textColor = [UIColor colorWithRed:0.6 green:0.9 blue:0.6 alpha:1.0];
     editor.font = [UIFont fontWithName:@"Menlo" size:13] ?: [UIFont systemFontOfSize:13];
@@ -223,6 +210,7 @@ static const NSTimeInterval kCheckInterval = 2.0;
     editor.autocorrectionType = UITextAutocorrectionTypeNo;
     editor.autocapitalizationType = UITextAutocapitalizationTypeNone;
     editor.spellCheckingType = UITextSpellCheckingTypeNo;
+    editor.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [panel addSubview:editor];
     self.scriptEditor = editor;
     
@@ -231,6 +219,7 @@ static const NSTimeInterval kCheckInterval = 2.0;
     status.text = @"Ready";
     status.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
     status.font = [UIFont systemFontOfSize:12];
+    status.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
     [panel addSubview:status];
     self.statusLabel = status;
     
@@ -238,6 +227,7 @@ static const NSTimeInterval kCheckInterval = 2.0;
     execBtn.frame = CGRectMake(16, panelH - 52, panelW - 32, 40);
     execBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.7 blue:0.4 alpha:1.0];
     execBtn.layer.cornerRadius = 8;
+    execBtn.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
     [execBtn setTitle:@"Execute" forState:UIControlStateNormal];
     [execBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     execBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
@@ -248,20 +238,62 @@ static const NSTimeInterval kCheckInterval = 2.0;
     self.panel = panel;
 }
 
-#pragma mark - Diagnostics
+#pragma mark - Relayout
 
-- (void)updateDiag {
+- (void)relayoutForSize:(CGSize)newSize {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (!self.diagLabel) return;
-        LuaHook *hook = [LuaHook sharedInstance];
-        NSNumber *pid = [hook currentPlaceId];
-        lua_State *state = [hook mainState];
-        NSString *text = [NSString stringWithFormat:
-                          @"lua_State: %@\nPlaceId: %@\nAllowed: %@",
-                          state ? @"OK" : @"nil",
-                          pid ? [pid stringValue] : @"nil",
-                          [[Executor allowedPlaceIds] componentsJoinedByString:@","]];
-        self.diagLabel.text = text;
+        if (!self.container) return;
+        self.container.frame = CGRectMake(0, 0, newSize.width, newSize.height);
+        
+        // زر — خلّه في مكانه النسبي
+        if (self.floatButton) {
+            CGFloat size = self.floatButton.bounds.size.width;
+            CGFloat margin = 20;
+            CGRect f = self.floatButton.frame;
+            // إذا كان الزر برا الشاشة، رجّعه
+            if (f.origin.x + f.size.width > newSize.width) {
+                f.origin.x = newSize.width - size - margin;
+            }
+            if (f.origin.y + f.size.height > newSize.height) {
+                f.origin.y = newSize.height / 2 - size / 2;
+            }
+            if (f.origin.x < 0) f.origin.x = margin;
+            if (f.origin.y < 0) f.origin.y = margin;
+            self.floatButton.frame = f;
+        }
+        
+        // panel — أعد توسيطه وأعد حساب الحجم
+        if (self.panel) {
+            CGFloat panelW = newSize.width * 0.8;
+            CGFloat panelH = newSize.height * 0.55;
+            CGFloat panelX = (newSize.width - panelW) / 2;
+            CGFloat panelY = (newSize.height - panelH) / 2;
+            self.panel.frame = CGRectMake(panelX, panelY, panelW, panelH);
+            
+            // حدّث العناصر الداخلية
+            UIView *p = self.panel;
+            for (UIView *sub in p.subviews) {
+                if ([sub isKindOfClass:[UITextView class]]) {
+                    sub.frame = CGRectMake(16, 52, panelW - 32, panelH - 52 - 100);
+                } else if ([sub isKindOfClass:[UILabel class]]) {
+                    UILabel *lbl = (UILabel *)sub;
+                    if (lbl == self.statusLabel) {
+                        lbl.frame = CGRectMake(16, panelH - 80, panelW - 32, 20);
+                    } else {
+                        // العنوان
+                        sub.frame = CGRectMake(16, 12, panelW - 60, 30);
+                    }
+                } else if ([sub isKindOfClass:[UIButton class]]) {
+                    UIButton *b = (UIButton *)sub;
+                    NSString *t = [b titleForState:UIControlStateNormal];
+                    if ([t isEqualToString:@"x"]) {
+                        b.frame = CGRectMake(panelW - 44, 8, 36, 36);
+                    } else {
+                        b.frame = CGRectMake(16, panelH - 52, panelW - 32, 40);
+                    }
+                }
+            }
+        }
     });
 }
 
@@ -270,7 +302,6 @@ static const NSTimeInterval kCheckInterval = 2.0;
 - (void)togglePanel {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.panel.hidden = !self.panel.hidden;
-        if (!self.panel.hidden) [self updateDiag];
     });
 }
 
