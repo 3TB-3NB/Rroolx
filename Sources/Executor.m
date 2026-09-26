@@ -1,5 +1,5 @@
 // language: Objective-C, file: Executor.m, runtime: iOS 15+
-// *المنطق الأساسي — ينسّق بين الـ LuaHook والـ UI*
+// *المنطق الأساسي + إدارة الـ PlaceId*
 
 #import "Executor.h"
 #import "LuaHook.h"
@@ -7,6 +7,10 @@
 #import <os/log.h>
 
 static os_log_t g_log;
+
+// ⚠️ PlaceIds المسموح — الـ dylib يشتغل بس في هذي الألعاب
+// تقدر تضيف أكثر من واحدة
+static NSArray<NSNumber *> *kAllowedPlaceIds = nil;
 
 @interface Executor ()
 @property (nonatomic, assign) BOOL isRunning;
@@ -21,8 +25,17 @@ static os_log_t g_log;
     dispatch_once(&onceToken, ^{
         instance = [[Executor alloc] init];
         g_log = os_log_create("com.alpha.executor", "main");
+        kAllowedPlaceIds = @[
+            @(4924922222),   // Brookhaven RP
+            // @(920587237), // Adopt Me — فعّلها لو تبي
+            // @(2753915549),// Blox Fruits
+        ];
     });
     return instance;
+}
+
++ (NSArray<NSNumber *> *)allowedPlaceIds {
+    return kAllowedPlaceIds;
 }
 
 - (instancetype)init {
@@ -36,23 +49,22 @@ static os_log_t g_log;
 - (void)start {
     if (self.isRunning) return;
     
-    os_log_info(g_log, "executor starting...");
+    os_log_info(g_log, "executor starting (silent)...");
     
-    // 1. هوّك في Luau VM
+    // هوّك في Luau VM (بصمت)
     BOOL hooked = [[LuaHook sharedInstance] installHooks];
     if (!hooked) {
-        os_log_error(g_log, "failed to hook Luau VM");
-        // حتى لو فشل، نكمل — يمكن الـ VM يتحمّل لاحقاً
+        os_log_error(g_log, "failed to hook Luau VM — fallback to UI detection");
     }
     
-    // 2. اعرض الواجهة
+    // شغّل الـ overlay — بصمت
     dispatch_async(dispatch_get_main_queue(), ^{
         self.overlay = [[UIOverlay alloc] init];
-        [self.overlay show];
+        [self.overlay startSilentMode];
     });
     
     self.isRunning = YES;
-    os_log_info(g_log, "executor started");
+    os_log_info(g_log, "executor started — monitoring for target game");
 }
 
 - (void)stop {
@@ -61,7 +73,7 @@ static os_log_t g_log;
     [[LuaHook sharedInstance] removeHooks];
     
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self.overlay hide];
+        [self.overlay stop];
         self.overlay = nil;
     });
     
@@ -80,7 +92,6 @@ static os_log_t g_log;
     }
     
     os_log_info(g_log, "executing script (%lu chars)", (unsigned long)script.length);
-    
     return [[LuaHook sharedInstance] executeLua:script error:error];
 }
 
