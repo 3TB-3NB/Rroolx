@@ -18,23 +18,8 @@ typedef struct {
 
 + (instancetype)shared;
 
-// البحث والاستكشاف
 - (BOOL)discoverAll;
-
-// Pattern scanning
-- (uintptr_t)scanForPattern:(const uint8_t *)pattern
-                     length:(size_t)length
-                      mask:(const uint8_t *)mask
-                     maxHits:(int)maxHits;
-
-// استخراج lua_State من Luau VM
-- (uintptr_t)findLuaStateViaScriptContext;
-- (uintptr_t)findLuaStateViaLuauExecute;
-
-// البحث عن luau_execute في binary
 - (uintptr_t)findLuauExecuteInRoblox;
-
-// المعلومات
 - (LuaRuntimeInfo)info;
 - (lua_State *)mainState;
 
