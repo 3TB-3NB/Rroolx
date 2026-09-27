@@ -19,6 +19,10 @@ typedef struct {
 + (instancetype)shared;
 
 - (BOOL)discoverAll;
+- (uintptr_t)scanForPattern:(const uint8_t *)pattern
+                     length:(size_t)length
+                       mask:(const uint8_t *)mask
+                    maxHits:(int)maxHits;
 - (uintptr_t)findLuauExecuteInRoblox;
 - (LuaRuntimeInfo)info;
 - (lua_State *)mainState;
