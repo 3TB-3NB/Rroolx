@@ -67,7 +67,6 @@ typedef struct lua_State {
 #define LUA_STATE_GT_OFFSET           0x60
 #define LUA_STATE_USERDATA_OFFSET     0x80
 
-// TValue type tags
 #define LUA_TNIL           0
 #define LUA_TBOOLEAN       1
 #define LUA_TLIGHTUSERDATA 2
@@ -80,7 +79,6 @@ typedef struct lua_State {
 #define LUA_TTHREAD        9
 #define LUA_TBUFFER        10
 
-// Pseudo indexes
 #define LUA_REGISTRYINDEX (-1001000)
 #define LUA_GLOBALSINDEX  (-1001002)
 
