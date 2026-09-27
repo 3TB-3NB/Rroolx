@@ -8,6 +8,8 @@
 static os_log_t g_log;
 static const NSTimeInterval kCheckInterval = 1.5;
 
+#pragma mark - PassThrough View
+
 @interface PassThroughView : UIView
 @end
 
@@ -27,15 +29,20 @@ static const NSTimeInterval kCheckInterval = 1.5;
 }
 @end
 
+#pragma mark - UIOverlay
+
 @interface UIOverlay () <UITextViewDelegate>
 
 @property (nonatomic, strong) PassThroughView *container;
 @property (nonatomic, strong) UIButton *floatButton;
 @property (nonatomic, strong) UIView *panel;
+
 @property (nonatomic, strong) UITextView *scriptEditor;
-@property (nonatomic, strong) UITextView *consoleView;   // ⭐ console
+@property (nonatomic, strong) UITextView *consoleView;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UILabel *diagLabel;
+
+@property (nonatomic, strong) NSLayoutConstraint *panelBottomConstraint;
 @property (nonatomic, strong) NSTimer *monitorTimer;
 @property (nonatomic, assign) BOOL uiBuilt;
 @property (nonatomic, strong) NSMutableArray<NSString *> *consoleLines;
@@ -44,7 +51,7 @@ static const NSTimeInterval kCheckInterval = 1.5;
 
 @implementation UIOverlay
 
-#pragma mark - Start/Stop
+#pragma mark - Start / Stop
 
 - (void)startSilentMode {
     g_log = os_log_create("com.alpha.executor", "ui");
@@ -52,6 +59,7 @@ static const NSTimeInterval kCheckInterval = 1.5;
     dispatch_async(dispatch_get_main_queue(), ^{
         self.uiBuilt = NO;
         [self startMonitoring];
+        [self observeKeyboard];
         os_log_info(g_log, "silent mode started");
     });
 }
@@ -60,12 +68,67 @@ static const NSTimeInterval kCheckInterval = 1.5;
     dispatch_async(dispatch_get_main_queue(), ^{
         [self.monitorTimer invalidate];
         self.monitorTimer = nil;
+        [[NSNotificationCenter defaultCenter] removeObserver:self];
         [self.container removeFromSuperview];
         self.container = nil;
     });
 }
 
-#pragma mark - Diagnostics
+#pragma mark - Keyboard Handling
+
+- (void)observeKeyboard {
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(keyboardWillShow:)
+                                                 name:UIKeyboardWillShowNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(keyboardWillHide:)
+                                                 name:UIKeyboardWillHideNotification
+                                               object:nil];
+}
+
+- (void)keyboardWillShow:(NSNotification *)note {
+    NSDictionary *info = note.userInfo;
+    CGRect kbFrame = [info[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    CGFloat kbHeight = kbFrame.size.height;
+    CGFloat duration = [info[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // ارفع الـ panel
+        [UIView animateWithDuration:duration animations:^{
+            CGFloat panelH = self.panel.bounds.size.height;
+            CGFloat screenH = self.container.bounds.size.height;
+            CGFloat newY = screenH - panelH - kbHeight - 10;
+            if (newY < 40) newY = 40;
+            CGRect f = self.panel.frame;
+            f.origin.y = newY;
+            self.panel.frame = f;
+        }];
+    });
+}
+
+- (void)keyboardWillHide:(NSNotification *)note {
+    NSDictionary *info = note.userInfo;
+    CGFloat duration = [info[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [UIView animateWithDuration:duration animations:^{
+            CGFloat screenH = self.container.bounds.size.height;
+            CGFloat panelH = self.panel.bounds.size.height;
+            CGRect f = self.panel.frame;
+            f.origin.y = (screenH - panelH) / 2;
+            self.panel.frame = f;
+        }];
+    });
+}
+
+- (void)hideKeyboard {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.scriptEditor resignFirstResponder];
+    });
+}
+
+#pragma mark - Diagnostics & Console
 
 - (void)setDiagnostics:(NSString *)diag {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -73,21 +136,17 @@ static const NSTimeInterval kCheckInterval = 1.5;
     });
 }
 
-#pragma mark - Console
-
 - (void)appendConsoleLine:(NSString *)line {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!line) return;
         [self.consoleLines addObject:line];
-        // احتفظ بآخر 50 سطر
-        if (self.consoleLines.count > 50) {
+        if (self.consoleLines.count > 100) {
             [self.consoleLines removeObjectAtIndex:0];
         }
         NSString *all = [self.consoleLines componentsJoinedByString:@"\n"];
         if (self.consoleView) {
             self.consoleView.text = all;
-            // scroll للأخير
-            NSRange r = NSMakeRange(self.consoleView.text.length - 1, 1);
+            NSRange r = NSMakeRange(self.consoleView.text.length, 0);
             [self.consoleView scrollRangeToVisible:r];
         }
     });
@@ -140,7 +199,6 @@ static const NSTimeInterval kCheckInterval = 1.5;
     container.tag = 99999;
     container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     container.userInteractionEnabled = YES;
-    
     [rootView addSubview:container];
     self.container = container;
     
@@ -149,7 +207,6 @@ static const NSTimeInterval kCheckInterval = 1.5;
     
     self.floatButton.hidden = NO;
     self.panel.hidden = YES;
-    
     self.uiBuilt = YES;
     os_log_info(g_log, "UI built");
 }
@@ -173,8 +230,7 @@ static const NSTimeInterval kCheckInterval = 1.5;
     btn.titleLabel.font = [UIFont boldSystemFontOfSize:24];
     [btn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
     
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
-                                    initWithTarget:self action:@selector(handlePan:)];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handlePan:)];
     [btn addGestureRecognizer:pan];
     
     [container addSubview:btn];
@@ -183,13 +239,10 @@ static const NSTimeInterval kCheckInterval = 1.5;
 
 - (void)buildPanel:(UIView *)container {
     CGSize s = container.bounds.size;
-    CGFloat panelW = s.width * 0.9;
+    CGFloat panelW = s.width * 0.92;
     CGFloat panelH = s.height * 0.75;
     
-    UIView *panel = [[UIView alloc] initWithFrame:
-                     CGRectMake((s.width - panelW) / 2,
-                                (s.height - panelH) / 2,
-                                panelW, panelH)];
+    UIView *panel = [[UIView alloc] initWithFrame:CGRectMake((s.width - panelW)/2, (s.height - panelH)/2, panelW, panelH)];
     panel.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.12 alpha:0.98];
     panel.layer.cornerRadius = 14;
     panel.layer.shadowColor = [UIColor blackColor].CGColor;
@@ -200,92 +253,144 @@ static const NSTimeInterval kCheckInterval = 1.5;
     panel.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight |
                              UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin |
                              UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+    [container addSubview:panel];
+    self.panel = panel;
     
-    // Title
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 10, panelW - 60, 26)];
+    CGFloat pad = 12;
+    CGFloat y = 8;
+    
+    // ==== Header ====
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, panelW - 130, 26)];
     title.text = @"Executor";
     title.textColor = [UIColor whiteColor];
-    title.font = [UIFont boldSystemFontOfSize:18];
-    title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    title.font = [UIFont boldSystemFontOfSize:17];
     [panel addSubview:title];
     
-    // Close
+    // زر Hide Keyboard
+    UIButton *kbBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    kbBtn.frame = CGRectMake(panelW - 128, y, 40, 30);
+    [kbBtn setTitle:@"⌨" forState:UIControlStateNormal];
+    [kbBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    kbBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.4 blue:0.7 alpha:0.8];
+    kbBtn.layer.cornerRadius = 6;
+    kbBtn.titleLabel.font = [UIFont systemFontOfSize:18];
+    [kbBtn addTarget:self action:@selector(hideKeyboard) forControlEvents:UIControlEventTouchUpInside];
+    [panel addSubview:kbBtn];
+    
+    // زر Close
     UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    closeBtn.frame = CGRectMake(panelW - 44, 6, 36, 36);
-    closeBtn.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    closeBtn.frame = CGRectMake(panelW - 44, y, 36, 30);
     [closeBtn setTitle:@"×" forState:UIControlStateNormal];
     [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    closeBtn.titleLabel.font = [UIFont systemFontOfSize:28];
+    closeBtn.backgroundColor = [UIColor colorWithRed:0.7 green:0.2 blue:0.2 alpha:0.8];
+    closeBtn.layer.cornerRadius = 6;
+    closeBtn.titleLabel.font = [UIFont systemFontOfSize:22];
     [closeBtn addTarget:self action:@selector(togglePanel) forControlEvents:UIControlEventTouchUpInside];
     [panel addSubview:closeBtn];
     
-    // Diagnostics line
-    UILabel *diag = [[UILabel alloc] initWithFrame:CGRectMake(16, 36, panelW - 32, 30)];
+    y += 34;
+    
+    // ==== Diagnostics ====
+    UILabel *diag = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, panelW - pad*2, 26)];
     diag.text = @"initializing...";
     diag.textColor = [UIColor yellowColor];
     diag.font = [UIFont fontWithName:@"Menlo" size:9] ?: [UIFont systemFontOfSize:9];
     diag.numberOfLines = 0;
-    diag.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     [panel addSubview:diag];
     self.diagLabel = diag;
     
-    // ⭐ Script editor (أعلى)
-    CGFloat editorY = 70;
-    CGFloat editorH = (panelH - editorY - 200) / 2;
-    UITextView *editor = [[UITextView alloc] initWithFrame:
-                          CGRectMake(16, editorY, panelW - 32, editorH)];
+    y += 28;
+    
+    // ==== Editor Header ====
+    UILabel *editLbl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, 100, 16)];
+    editLbl.text = @"SCRIPT";
+    editLbl.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
+    editLbl.font = [UIFont boldSystemFontOfSize:10];
+    [panel addSubview:editLbl];
+    y += 18;
+    
+    // ==== Script Editor (30%) ====
+    CGFloat availableH = panelH - y - 130; // مساحة بعد الـ editor
+    CGFloat editorH = availableH * 0.35;
+    CGFloat consoleH = availableH * 0.65;
+    
+    UITextView *editor = [[UITextView alloc] initWithFrame:CGRectMake(pad, y, panelW - pad*2, editorH)];
     editor.backgroundColor = [UIColor colorWithRed:0.05 green:0.05 blue:0.08 alpha:1.0];
     editor.textColor = [UIColor colorWithRed:0.6 green:0.9 blue:0.6 alpha:1.0];
     editor.font = [UIFont fontWithName:@"Menlo" size:12] ?: [UIFont systemFontOfSize:12];
-    editor.layer.cornerRadius = 8;
+    editor.layer.cornerRadius = 6;
     editor.text = @"print(\"hellow world\")";
     editor.delegate = self;
     editor.autocorrectionType = UITextAutocorrectionTypeNo;
     editor.autocapitalizationType = UITextAutocapitalizationTypeNone;
     editor.spellCheckingType = UITextSpellCheckingTypeNo;
-    editor.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    // زر Done فوق الكيبورد
+    UIToolbar *toolbar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, s.width, 44)];
+    toolbar.barStyle = UIBarStyleBlack;
+    UIBarButtonItem *doneBtn = [[UIBarButtonItem alloc] initWithTitle:@"Done"
+                                                                style:UIBarButtonItemStyleDone
+                                                               target:self
+                                                               action:@selector(hideKeyboard)];
+    UIBarButtonItem *flex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    toolbar.items = @[flex, doneBtn];
+    editor.inputAccessoryView = toolbar;
     [panel addSubview:editor];
     self.scriptEditor = editor;
     
-    // ⭐ Console (أسفل المحرر)
-    CGFloat consoleY = editorY + editorH + 8;
-    CGFloat consoleH = editorH;
-    UITextView *console = [[UITextView alloc] initWithFrame:
-                           CGRectMake(16, consoleY, panelW - 32, consoleH)];
+    y += editorH + 6;
+    
+    // ==== Console Header ====
+    UILabel *consLbl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, 100, 16)];
+    consLbl.text = @"CONSOLE";
+    consLbl.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
+    consLbl.font = [UIFont boldSystemFontOfSize:10];
+    [panel addSubview:consLbl];
+    
+    // زر Clear Console
+    UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    clearBtn.frame = CGRectMake(panelW - 90, y - 2, 78, 20);
+    [clearBtn setTitle:@"Clear" forState:UIControlStateNormal];
+    [clearBtn setTitleColor:[UIColor colorWithWhite:0.7 alpha:1.0] forState:UIControlStateNormal];
+    clearBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.2 blue:0.25 alpha:1.0];
+    clearBtn.layer.cornerRadius = 4;
+    clearBtn.titleLabel.font = [UIFont systemFontOfSize:10];
+    [clearBtn addTarget:self action:@selector(clearConsole) forControlEvents:UIControlEventTouchUpInside];
+    [panel addSubview:clearBtn];
+    y += 18;
+    
+    // ==== Console (65%) ====
+    UITextView *console = [[UITextView alloc] initWithFrame:CGRectMake(pad, y, panelW - pad*2, consoleH)];
     console.backgroundColor = [UIColor colorWithRed:0.02 green:0.02 blue:0.04 alpha:1.0];
     console.textColor = [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
-    console.font = [UIFont fontWithName:@"Menlo" size:11] ?: [UIFont systemFontOfSize:11];
-    console.layer.cornerRadius = 8;
+    console.font = [UIFont fontWithName:@"Menlo" size:10] ?: [UIFont systemFontOfSize:10];
+    console.layer.cornerRadius = 6;
     console.text = @"> Console ready";
     console.editable = NO;
-    console.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [panel addSubview:console];
     self.consoleView = console;
     
-    // Status
-    UILabel *status = [[UILabel alloc] initWithFrame:
-                       CGRectMake(16, panelH - 60, panelW - 32, 20)];
+    y += consoleH + 6;
+    
+    // ==== Status ====
+    UILabel *status = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, panelW - pad*2, 16)];
     status.text = @"Ready";
     status.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
     status.font = [UIFont systemFontOfSize:11];
-    status.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
     [panel addSubview:status];
     self.statusLabel = status;
     
-    // Execute button
+    y += 18;
+    
+    // ==== Execute Button ====
     UIButton *execBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    execBtn.frame = CGRectMake(16, panelH - 44, panelW - 32, 38);
+    execBtn.frame = CGRectMake(pad, y, panelW - pad*2, 40);
     execBtn.backgroundColor = [UIColor colorWithRed:0.2 green:0.7 blue:0.4 alpha:1.0];
     execBtn.layer.cornerRadius = 8;
-    execBtn.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
     [execBtn setTitle:@"Execute" forState:UIControlStateNormal];
     [execBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    execBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    execBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     [execBtn addTarget:self action:@selector(executeTapped) forControlEvents:UIControlEventTouchUpInside];
     [panel addSubview:execBtn];
-    
-    [container addSubview:panel];
-    self.panel = panel;
 }
 
 #pragma mark - Actions
@@ -293,6 +398,7 @@ static const NSTimeInterval kCheckInterval = 1.5;
 - (void)togglePanel {
     dispatch_async(dispatch_get_main_queue(), ^{
         self.panel.hidden = !self.panel.hidden;
+        if (!self.panel.hidden) [self hideKeyboard];
     });
 }
 
@@ -300,8 +406,7 @@ static const NSTimeInterval kCheckInterval = 1.5;
     UIView *host = self.container;
     if (!host) return;
     CGPoint t = [pan translationInView:host];
-    CGPoint c = CGPointMake(self.floatButton.center.x + t.x,
-                            self.floatButton.center.y + t.y);
+    CGPoint c = CGPointMake(self.floatButton.center.x + t.x, self.floatButton.center.y + t.y);
     CGFloat hw = self.floatButton.bounds.size.width / 2;
     CGFloat hh = self.floatButton.bounds.size.height / 2;
     c.x = MAX(hw, MIN(host.bounds.size.width - hw, c.x));
@@ -310,26 +415,32 @@ static const NSTimeInterval kCheckInterval = 1.5;
     [pan setTranslation:CGPointZero inView:host];
 }
 
+- (void)clearConsole {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.consoleLines removeAllObjects];
+        self.consoleView.text = @"> Console cleared";
+    });
+}
+
 - (void)executeTapped {
+    [self hideKeyboard];
     NSString *script = self.scriptEditor.text;
     self.statusLabel.text = @"Executing...";
     self.statusLabel.textColor = [UIColor yellowColor];
-    [self appendConsoleLine:@"> executing..."];
+    [self appendConsoleLine:@"> executing script..."];
     
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *error = nil;
         BOOL ok = [[Executor sharedInstance] executeScript:script error:&error];
-        
         dispatch_async(dispatch_get_main_queue(), ^{
             if (ok) {
-                self.statusLabel.text = @"OK";
+                self.statusLabel.text = @"✓ OK";
                 self.statusLabel.textColor = [UIColor greenColor];
-                [self appendConsoleLine:@"> execution completed"];
+                [self appendConsoleLine:@"> ✓ execution successful"];
             } else {
-                self.statusLabel.text = @"ERR";
+                self.statusLabel.text = @"✗ ERR";
                 self.statusLabel.textColor = [UIColor redColor];
-                [self appendConsoleLine:[NSString stringWithFormat:@"> ERR: %@",
-                                          error.localizedDescription]];
+                [self appendConsoleLine:[NSString stringWithFormat:@"> ✗ ERR: %@", error.localizedDescription]];
             }
         });
     });
