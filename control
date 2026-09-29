@@ -1,9 +1,9 @@
-Package: com.alpha.executor
-Name: Executor
+Package: com.krb.discovery
+Name: KRB Discovery
 Version: 1.0.0
 Architecture: iphoneos-arm64
-Description: iOS Roblox Executor dylib
-Maintainer: alpha_xk
-Author: alpha_xk
+Description: KRB Discovery Tool
+Maintainer: KRB Team
+Author: KRB Team
 Section: Tweaks
 Depends: mobilesubstrate
