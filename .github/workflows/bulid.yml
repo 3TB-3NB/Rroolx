@@ -1,68 +1,33 @@
-name: Build Executor Dylib
+name: Build KRB Discovery Dylib
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
     branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build dylib
     runs-on: macos-14
-    timeout-minutes: 30
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Setup Xcode
-        run: |
-          sudo xcode-select -s /Applications/Xcode.app
-          xcodebuild -version
-
-      - name: Install Theos
+      - uses: actions/checkout@v4
+      
+      - name: Setup Theos
         run: |
           export THEOS=$HOME/theos
           git clone --recursive --depth 1 https://github.com/theos/theos.git $THEOS
           echo "THEOS=$THEOS" >> $GITHUB_ENV
-          echo "$THEOS/bin" >> $GITHUB_PATH
-
-      - name: Install Theos SDK
+          
+      - name: Install SDK
         run: |
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
           mkdir -p $THEOS/sdks
-          cp -r /tmp/sdks/iPhoneOS*.sdk $THEOS/sdks/ 2>/dev/null || true
-          ls $THEOS/sdks/
-
-      - name: Install ldid
-        run: |
-          brew install ldid || true
-
+          cp -r /tmp/sdks/iPhoneOS*.sdk $THEOS/sdks/
+          
       - name: Build
-        run: |
-          make clean
-          make package FINALPACKAGE=1 DEBUG=0
-
-      - name: Find dylib
-        id: find_dylib
-        run: |
-          DYLIB=$(find .theos -name "*.dylib" -type f | head -1)
-          if [ -z "$DYLIB" ]; then
-            echo "ERROR: dylib not found"
-            exit 1
-          fi
-          echo "dylib=$DYLIB" >> $GITHUB_OUTPUT
-          ls -lh "$DYLIB"
-          file "$DYLIB"
-
-      - name: Upload artifact
+        run: make clean && make
+        
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: executor-dylib
-          path: ${{ steps.find_dylib.outputs.dylib }}
-          if-no-files-found: error
-          retention-days: 90
+          name: krb-discovery
+          path: .theos/obj/krb.dylib
