@@ -10,24 +10,39 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Theos
         run: |
           export THEOS=$HOME/theos
           git clone --recursive --depth 1 https://github.com/theos/theos.git $THEOS
           echo "THEOS=$THEOS" >> $GITHUB_ENV
-          
+
       - name: Install SDK
         run: |
           git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
           mkdir -p $THEOS/sdks
           cp -r /tmp/sdks/iPhoneOS*.sdk $THEOS/sdks/
-          
+          ls $THEOS/sdks/
+
+      - name: Install ldid
+        run: |
+          brew install ldid
+          which ldid
+          ldid -v || true
+
       - name: Build
         run: make clean && make
-        
+
+      - name: Find dylib
+        id: find_dylib
+        run: |
+          DYLIB=$(find .theos -name "krb.dylib" -type f | head -1)
+          echo "dylib=$DYLIB" >> $GITHUB_OUTPUT
+          ls -lh "$DYLIB"
+          file "$DYLIB"
+
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: krb-discovery
-          path: .theos/obj/krb.dylib
+          name: krb-dylib
+          path: ${{ steps.find_dylib.outputs.dylib }}
